@@ -244,15 +244,13 @@ static void test_region_null_safety(void)
 
 static void test_dma_null_safety(void)
 {
-    TEST("dma: NULL safety");
+    TEST("dma: NULL safety (low-level IOMMU)");
     int ok = 1;
-    evfio_container_t c = { .fd = 999 };
-    evfio_dma_t dma;
-    ok &= (evfio_dma_map(NULL, &dma, 4096, 0) == EVFIO_ERR_INVAL);
-    ok &= (evfio_dma_map(&c, NULL, 4096, 0) == EVFIO_ERR_INVAL);
-    ok &= (evfio_dma_map(&c, &dma, 0, 0) == EVFIO_ERR_INVAL);
-    ok &= (evfio_dma_unmap(NULL, &dma) == EVFIO_ERR_INVAL);
-    ok &= (evfio_dma_unmap(&c, NULL) == EVFIO_ERR_INVAL);
+    ok &= (evfio_iommu_dma_map(-1, (void *)(uintptr_t)0x1000, 4096, 0) == EVFIO_ERR_INVAL);
+    ok &= (evfio_iommu_dma_map(999, NULL, 4096, 0) == EVFIO_ERR_INVAL);
+    ok &= (evfio_iommu_dma_map(999, (void *)(uintptr_t)0x1000, 0, 0) == EVFIO_ERR_INVAL);
+    ok &= (evfio_iommu_dma_unmap(-1, 0, 4096) == EVFIO_ERR_INVAL);
+    ok &= (evfio_iommu_dma_unmap(999, 0, 0) == EVFIO_ERR_INVAL);
     if (ok)
         PASS();
     else
@@ -336,6 +334,187 @@ static void test_pci_get_ids_invalid(void)
         FAIL("expected EVFIO_ERR_INVAL for all");
 }
 
+/* ---- High-level API tests ---- */
+
+static void test_load_vfio_driver_null(void)
+{
+    TEST("load_vfio_driver: NULL/invalid BDF");
+    int ok = 1;
+    ok &= (evfio_load_vfio_driver(NULL) == EVFIO_ERR_INVAL);
+    ok &= (evfio_load_vfio_driver("") == EVFIO_ERR_INVAL);
+    ok &= (evfio_load_vfio_driver("garbage") == EVFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("expected EVFIO_ERR_INVAL for all");
+}
+
+static void test_open_null_safety(void)
+{
+    TEST("evfio_open: NULL safety");
+    int ok = 1;
+    evfio_ctx_t *ctx = NULL;
+    ok &= (evfio_open(NULL, "0000:01:00.0") == EVFIO_ERR_INVAL);
+    ok &= (evfio_open(&ctx, NULL) == EVFIO_ERR_INVAL);
+    ok &= (evfio_open(&ctx, "") == EVFIO_ERR_INVAL);
+    ok &= (evfio_open(&ctx, "garbage") == EVFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("NULL safety failed");
+}
+
+static void test_close_null_safety(void)
+{
+    TEST("evfio_close: NULL safety");
+    evfio_close(NULL); /* Should not crash */
+    PASS();
+}
+
+static void test_msi_enable_null_safety(void)
+{
+    TEST("evfio_msi_enable: NULL/invalid safety");
+    int ok = 1;
+    ok &= (evfio_msi_enable(NULL, 1) == EVFIO_ERR_INVAL);
+    /* Intentionally test with uninitialized (zero) context */
+    evfio_ctx_t dummy;
+    memset(&dummy, 0, sizeof(dummy));
+    ok &= (evfio_msi_enable(&dummy, 1) == EVFIO_ERR_INVAL);
+    /* Zero vectors */
+    dummy.initialized = 1;
+    ok &= (evfio_msi_enable(&dummy, 0) == EVFIO_ERR_INVAL);
+    /* Too many vectors */
+    ok &= (evfio_msi_enable(&dummy, EVFIO_MAX_MSI_VECTORS + 1) == EVFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("NULL/invalid safety failed");
+}
+
+static void test_msi_disable_null_safety(void)
+{
+    TEST("evfio_msi_disable: NULL/invalid safety");
+    int ok = 1;
+    ok &= (evfio_msi_disable(NULL) == EVFIO_ERR_INVAL);
+    evfio_ctx_t dummy;
+    memset(&dummy, 0, sizeof(dummy));
+    ok &= (evfio_msi_disable(&dummy) == EVFIO_ERR_INVAL);
+    /* Not enabled - should be OK */
+    dummy.initialized = 1;
+    ok &= (evfio_msi_disable(&dummy) == EVFIO_OK);
+    if (ok)
+        PASS();
+    else
+        FAIL("NULL/invalid safety failed");
+}
+
+static void test_handle_interrupt_null_safety(void)
+{
+    TEST("evfio_handle_interrupt: NULL/invalid safety");
+    int ok = 1;
+    ok &= (evfio_handle_interrupt(NULL, 0) == EVFIO_ERR_INVAL);
+    evfio_ctx_t dummy;
+    memset(&dummy, 0, sizeof(dummy));
+    ok &= (evfio_handle_interrupt(&dummy, 0) == EVFIO_ERR_INVAL);
+    /* Initialized but MSI not enabled */
+    dummy.initialized = 1;
+    ok &= (evfio_handle_interrupt(&dummy, 0) == EVFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("NULL/invalid safety failed");
+}
+
+static void test_dma_map_null_safety(void)
+{
+    TEST("evfio_dma_map: NULL/invalid safety");
+    int ok = 1;
+    evfio_dma_t dma;
+    char buf[4096];
+    ok &= (evfio_dma_map(NULL, &dma, buf, 4096, 0) == EVFIO_ERR_INVAL);
+    evfio_ctx_t dummy;
+    memset(&dummy, 0, sizeof(dummy));
+    ok &= (evfio_dma_map(&dummy, &dma, buf, 4096, 0) == EVFIO_ERR_INVAL);
+    dummy.initialized = 1;
+    ok &= (evfio_dma_map(&dummy, NULL, buf, 4096, 0) == EVFIO_ERR_INVAL);
+    ok &= (evfio_dma_map(&dummy, &dma, NULL, 4096, 0) == EVFIO_ERR_INVAL);
+    ok &= (evfio_dma_map(&dummy, &dma, buf, 0, 0) == EVFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("NULL/invalid safety failed");
+}
+
+static void test_dma_unmap_null_safety(void)
+{
+    TEST("evfio_dma_unmap: NULL/invalid safety");
+    int ok = 1;
+    evfio_dma_t dma;
+    memset(&dma, 0, sizeof(dma));
+    ok &= (evfio_dma_unmap(NULL, &dma) == EVFIO_ERR_INVAL);
+    evfio_ctx_t dummy;
+    memset(&dummy, 0, sizeof(dummy));
+    ok &= (evfio_dma_unmap(&dummy, &dma) == EVFIO_ERR_INVAL);
+    dummy.initialized = 1;
+    ok &= (evfio_dma_unmap(&dummy, NULL) == EVFIO_ERR_INVAL);
+    /* dma with NULL vaddr */
+    ok &= (evfio_dma_unmap(&dummy, &dma) == EVFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("NULL/invalid safety failed");
+}
+
+static void test_dma_alloc_map_null_safety(void)
+{
+    TEST("evfio_dma_alloc_map: NULL/invalid safety");
+    int ok = 1;
+    evfio_dma_t dma;
+    ok &= (evfio_dma_alloc_map(NULL, &dma, 4096, 0) == EVFIO_ERR_INVAL);
+    evfio_ctx_t dummy;
+    memset(&dummy, 0, sizeof(dummy));
+    ok &= (evfio_dma_alloc_map(&dummy, &dma, 4096, 0) == EVFIO_ERR_INVAL);
+    dummy.initialized = 1;
+    ok &= (evfio_dma_alloc_map(&dummy, NULL, 4096, 0) == EVFIO_ERR_INVAL);
+    ok &= (evfio_dma_alloc_map(&dummy, &dma, 0, 0) == EVFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("NULL/invalid safety failed");
+}
+
+static void test_dma_free_unmap_null_safety(void)
+{
+    TEST("evfio_dma_free_unmap: NULL/invalid safety");
+    int ok = 1;
+    evfio_dma_t dma;
+    memset(&dma, 0, sizeof(dma));
+    ok &= (evfio_dma_free_unmap(NULL, &dma) == EVFIO_ERR_INVAL);
+    evfio_ctx_t dummy;
+    memset(&dummy, 0, sizeof(dummy));
+    ok &= (evfio_dma_free_unmap(&dummy, &dma) == EVFIO_ERR_INVAL);
+    dummy.initialized = 1;
+    ok &= (evfio_dma_free_unmap(&dummy, NULL) == EVFIO_ERR_INVAL);
+    ok &= (evfio_dma_free_unmap(&dummy, &dma) == EVFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("NULL/invalid safety failed");
+}
+
+static void test_is_bound_to_vfio_invalid(void)
+{
+    TEST("is_bound_to_vfio: invalid/non-existent BDF");
+    int ok = 1;
+    ok &= (evfio_is_bound_to_vfio(NULL) == 0);
+    ok &= (evfio_is_bound_to_vfio("garbage") == 0);
+    ok &= (evfio_is_bound_to_vfio("0000:ff:1f.7") == 0);
+    if (ok)
+        PASS();
+    else
+        FAIL("expected 0 for all");
+}
+
 /* ---- Run all tests ---- */
 
 int main(void)
@@ -373,6 +552,19 @@ int main(void)
     test_bind_invalid_bdf();
     test_unbind_invalid_bdf();
     test_pci_get_ids_invalid();
+
+    printf("\n[High-Level API]\n");
+    test_load_vfio_driver_null();
+    test_open_null_safety();
+    test_close_null_safety();
+    test_msi_enable_null_safety();
+    test_msi_disable_null_safety();
+    test_handle_interrupt_null_safety();
+    test_dma_map_null_safety();
+    test_dma_unmap_null_safety();
+    test_dma_alloc_map_null_safety();
+    test_dma_free_unmap_null_safety();
+    test_is_bound_to_vfio_invalid();
 
     printf("\n====================\n");
     printf("Results: %d/%d passed\n", tests_passed, tests_run);

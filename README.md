@@ -1,35 +1,38 @@
 # easy_vfio
 
-A simple C library for managing PCIe devices via the Linux VFIO (Virtual Function I/O) framework. Provides a clean API for container/group/device lifecycle, BAR MMIO access, DMA memory mapping, interrupt setup, and PCI config space read/write.
+A simple C library for managing PCIe devices via the Linux VFIO (Virtual Function I/O) framework. Provides a high-level context-based API for plug-and-play integration, backed by modular low-level building blocks.
 
 ## Features
 
-- **Container management** – open/close `/dev/vfio/vfio`, set IOMMU type
-- **Group management** – open/close IOMMU groups, viability checks
-- **Device management** – get device fd, query regions/IRQs, reset
-- **BAR region access** – mmap-based MMIO with typed 8/16/32/64-bit accessors, or pread/pwrite-based PIO
-- **DMA mapping** – allocate page-aligned buffers and map them for device DMA
-- **Interrupt handling** – enable/disable eventfd-based INTx, MSI, MSI-X
+- **Context-based lifecycle** – one handle manages all device resources (container, group, device, IOMMU, interrupts)
+- **Plug-and-play design** – embed `evfio_ctx_t` in your project's global handle, init on startup, deinit on shutdown
+- **Driver management** – idempotent `evfio_load_vfio_driver()` to bind devices to `vfio-pci`
+- **MSI interrupts** – enable/disable MSI vectors with automatic eventfd management
+- **DMA mapping** – map external memory or allocate+map library-managed buffers
+- **BAR MMIO access** – mmap-based typed 8/16/32/64-bit accessors
 - **PCI config space** – read/write arbitrary offsets
-- **Utility helpers** – BDF validation, IOMMU group lookup, device bind/unbind to `vfio-pci`
+- **Defensive design** – idempotent operations, NULL safety, safe repeated open/close
 
 ## Building
 
-```bash
-make            # Build static (libeasy_vfio.a) and shared (libeasy_vfio.so) libraries
-make test       # Build and run unit tests
-make examples   # Build example programs
-make clean      # Remove build artifacts
-```
-
-### Install / Uninstall
+### Using build.sh (recommended)
 
 ```bash
-sudo make install    # Install to /usr/local by default
-sudo make uninstall
+./build.sh          # Build all (static + shared library)
+./build.sh test     # Build and run tests
+./build.sh clean    # Remove build directory
+./build.sh rebuild  # Clean + build
+./build.sh install  # Install (requires prior build)
 ```
 
-Override the install prefix with `PREFIX=/path make install`.
+### Using CMake directly
+
+```bash
+mkdir build && cd build
+cmake ..
+cmake --build . -- -j$(nproc)
+ctest --output-on-failure
+```
 
 ## Quick Start
 
@@ -37,85 +40,103 @@ Override the install prefix with `PREFIX=/path make install`.
 #include "easy_vfio.h"
 
 int main(void) {
-    evfio_container_t container;
-    evfio_group_t group;
-    evfio_device_t device;
+    evfio_ctx_t *ctx = NULL;
     const char *bdf = "0000:01:00.0";
 
-    /* 1. Find the IOMMU group */
-    int group_id = evfio_get_iommu_group(bdf);
+    /* 1. Bind device to vfio-pci (idempotent) */
+    evfio_load_vfio_driver(bdf);
 
-    /* 2. Open container & group */
-    evfio_container_open(&container);
-    evfio_group_open(&group, &container, group_id);
-    evfio_container_set_iommu(&container, VFIO_TYPE1v2_IOMMU);
+    /* 2. Open device (container + group + IOMMU + device) */
+    evfio_open(&ctx, bdf);
 
-    /* 3. Open the device */
-    evfio_device_open(&device, &group, bdf);
+    /* 3. Enable MSI interrupt (1 vector) */
+    evfio_msi_enable(ctx, 1);
 
-    /* 4. Map BAR0 for MMIO */
-    evfio_region_t bar0;
-    evfio_region_map(&bar0, &device, VFIO_PCI_BAR0_REGION_INDEX);
-    uint32_t reg = evfio_mmio_read32(&bar0, 0x00);
-    evfio_region_unmap(&bar0);
-
-    /* 5. DMA mapping */
+    /* 4. Allocate + map DMA buffer */
     evfio_dma_t dma;
-    evfio_dma_map(&container, &dma, 4096, 0x100000);
-    /* dma.vaddr is the CPU-visible pointer; dma.iova is the device address */
-    evfio_dma_unmap(&container, &dma);
+    evfio_dma_alloc_map(ctx, &dma, 4096, 0x100000);
+    /* dma.vaddr = CPU pointer, dma.iova = device address */
 
-    /* 6. Cleanup */
-    evfio_device_close(&device);
-    evfio_group_close(&group);
-    evfio_container_close(&container);
+    /* 5. Or map external memory */
+    evfio_dma_t ext_dma;
+    char my_buf[4096];
+    evfio_dma_map(ctx, &ext_dma, my_buf, 4096, 0x200000);
+
+    /* 6. Wait for interrupt */
+    evfio_handle_interrupt(ctx, 0);
+
+    /* 7. Cleanup */
+    evfio_dma_unmap(ctx, &ext_dma);
+    evfio_dma_free_unmap(ctx, &dma);
+    evfio_close(ctx);  /* Disables MSI, closes all fds, frees ctx */
     return 0;
 }
 ```
 
-See `examples/example_basic.c` for a more complete example.
+See `examples/example_basic.c` for a complete example.
 
-## Prerequisites
+## Integration
 
-- Linux with IOMMU enabled (`intel_iommu=on` or `amd_iommu=on` in kernel cmdline)
-- The `vfio-pci` kernel module loaded (`modprobe vfio-pci`)
-- The target PCIe device bound to `vfio-pci` (use `evfio_bind_device()` or manual sysfs bind)
-- Appropriate permissions for `/dev/vfio/` (root, or membership in the VFIO group)
+The library is designed for easy integration into existing projects:
+
+```c
+/* Embed in your project's device handle */
+struct my_device {
+    evfio_ctx_t *vfio;   /* VFIO context */
+    /* ... your other resources ... */
+};
+
+/* Initialize */
+evfio_load_vfio_driver(bdf);
+evfio_open(&my_dev->vfio, bdf);
+
+/* Use throughout your application */
+evfio_dma_alloc_map(my_dev->vfio, &dma, size, iova);
+
+/* Cleanup on shutdown */
+evfio_close(my_dev->vfio);
+```
 
 ## API Reference
 
+### High-Level Context API
+
+| Function | Description |
+|----------|-------------|
+| `evfio_load_vfio_driver(bdf)` | Bind device to vfio-pci (idempotent) |
+| `evfio_open(&ctx, bdf)` | Create and initialize device context |
+| `evfio_close(ctx)` | Destroy context and release all resources |
+| `evfio_msi_enable(ctx, n)` | Enable MSI with n vectors (creates eventfds) |
+| `evfio_msi_disable(ctx)` | Disable MSI and close eventfds |
+| `evfio_handle_interrupt(ctx, vec)` | Wait for interrupt on vector |
+| `evfio_dma_map(ctx, dma, vaddr, size, iova)` | Map external memory for DMA |
+| `evfio_dma_unmap(ctx, dma)` | Unmap DMA (no memory free) |
+| `evfio_dma_alloc_map(ctx, dma, size, iova)` | Allocate memory + DMA map |
+| `evfio_dma_free_unmap(ctx, dma)` | DMA unmap + free memory |
+
+### Low-Level API (Advanced)
+
 | Category | Function | Description |
 |----------|----------|-------------|
-| Container | `evfio_container_open()` | Open `/dev/vfio/vfio` |
-| | `evfio_container_close()` | Close the container |
+| Container | `evfio_container_open/close()` | Open/close `/dev/vfio/vfio` |
 | | `evfio_container_set_iommu()` | Set IOMMU type |
-| | `evfio_container_check_extension()` | Query extension support |
-| Group | `evfio_group_open()` | Open & attach IOMMU group |
-| | `evfio_group_close()` | Close the group |
-| | `evfio_group_is_viable()` | Check group viability |
-| Device | `evfio_device_open()` | Get device fd by BDF |
-| | `evfio_device_close()` | Close device |
+| Group | `evfio_group_open/close()` | Open/close IOMMU group |
+| Device | `evfio_device_open/close()` | Get device fd by BDF |
 | | `evfio_device_reset()` | PCI function-level reset |
-| | `evfio_device_get_region_info()` | Query region info |
-| | `evfio_device_get_irq_info()` | Query IRQ info |
-| Region | `evfio_region_map()` | mmap a BAR |
-| | `evfio_region_unmap()` | Unmap a BAR |
-| | `evfio_region_read()` / `evfio_region_write()` | PIO-based region I/O |
-| | `evfio_mmio_read{8,16,32,64}()` | Typed MMIO reads |
-| | `evfio_mmio_write{8,16,32,64}()` | Typed MMIO writes |
-| DMA | `evfio_dma_map()` | Allocate & map DMA buffer |
-| | `evfio_dma_unmap()` | Unmap & free DMA buffer |
-| IRQ | `evfio_irq_enable()` | Enable IRQs with eventfds |
-| | `evfio_irq_disable()` | Disable IRQs |
-| | `evfio_irq_unmask_intx()` | Unmask INTx |
-| Config | `evfio_pci_config_read()` | Read PCI config space |
-| | `evfio_pci_config_write()` | Write PCI config space |
-| Utility | `evfio_get_iommu_group()` | Look up IOMMU group for BDF |
-| | `evfio_bind_device()` | Bind device to vfio-pci |
-| | `evfio_unbind_device()` | Unbind device from driver |
-| | `evfio_bdf_valid()` | Validate BDF format |
-| | `evfio_pci_get_ids()` | Read vendor/device IDs |
+| Region | `evfio_region_map/unmap()` | mmap/unmap BAR |
+| | `evfio_mmio_read/write{8,16,32,64}()` | Typed MMIO access |
+| IRQ | `evfio_irq_enable/disable()` | Manage IRQs with eventfds |
+| Config | `evfio_pci_config_read/write()` | PCI config space I/O |
+| Utility | `evfio_bdf_valid()` | Validate BDF format |
+| | `evfio_get_iommu_group()` | Look up IOMMU group |
 | | `evfio_strerror()` | Error code to string |
+
+## Prerequisites
+
+- Linux with IOMMU enabled (`intel_iommu=on` or `amd_iommu=on`)
+- The `vfio-pci` kernel module loaded (`modprobe vfio-pci`)
+- CMake >= 3.10 and a C11 compiler
+- Appropriate permissions for `/dev/vfio/` (root, or VFIO group membership)
 
 ## License
 
