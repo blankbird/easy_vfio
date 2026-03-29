@@ -113,52 +113,81 @@ ssize_t evfio_region_write(evfio_device_t *device, uint32_t index,
     return ret;
 }
 
+/* Validate region pointer, bounds, and alignment for MMIO access */
+static inline int mmio_check(evfio_region_t *region, uint64_t offset,
+                             size_t access_size)
+{
+    if (!region || !region->addr)
+        return 0;
+    if (offset + access_size > region->size)
+        return 0;
+    if (access_size > 1 && (offset & (access_size - 1)) != 0)
+        return 0;
+    return 1;
+}
+
 /* Typed MMIO accessors for mapped regions */
 
 uint8_t evfio_mmio_read8(evfio_region_t *region, uint64_t offset)
 {
+    if (!mmio_check(region, offset, sizeof(uint8_t)))
+        return 0;
     volatile uint8_t *p = (volatile uint8_t *)((char *)region->addr + offset);
     return *p;
 }
 
 uint16_t evfio_mmio_read16(evfio_region_t *region, uint64_t offset)
 {
+    if (!mmio_check(region, offset, sizeof(uint16_t)))
+        return 0;
     volatile uint16_t *p = (volatile uint16_t *)((char *)region->addr + offset);
     return *p;
 }
 
 uint32_t evfio_mmio_read32(evfio_region_t *region, uint64_t offset)
 {
+    if (!mmio_check(region, offset, sizeof(uint32_t)))
+        return 0;
     volatile uint32_t *p = (volatile uint32_t *)((char *)region->addr + offset);
     return *p;
 }
 
 uint64_t evfio_mmio_read64(evfio_region_t *region, uint64_t offset)
 {
+    if (!mmio_check(region, offset, sizeof(uint64_t)))
+        return 0;
     volatile uint64_t *p = (volatile uint64_t *)((char *)region->addr + offset);
     return *p;
 }
 
 void evfio_mmio_write8(evfio_region_t *region, uint64_t offset, uint8_t val)
 {
+    if (!mmio_check(region, offset, sizeof(uint8_t)))
+        return;
     volatile uint8_t *p = (volatile uint8_t *)((char *)region->addr + offset);
     *p = val;
 }
 
 void evfio_mmio_write16(evfio_region_t *region, uint64_t offset, uint16_t val)
 {
+    if (!mmio_check(region, offset, sizeof(uint16_t)))
+        return;
     volatile uint16_t *p = (volatile uint16_t *)((char *)region->addr + offset);
     *p = val;
 }
 
 void evfio_mmio_write32(evfio_region_t *region, uint64_t offset, uint32_t val)
 {
+    if (!mmio_check(region, offset, sizeof(uint32_t)))
+        return;
     volatile uint32_t *p = (volatile uint32_t *)((char *)region->addr + offset);
     *p = val;
 }
 
 void evfio_mmio_write64(evfio_region_t *region, uint64_t offset, uint64_t val)
 {
+    if (!mmio_check(region, offset, sizeof(uint64_t)))
+        return;
     volatile uint64_t *p = (volatile uint64_t *)((char *)region->addr + offset);
     *p = val;
 }
