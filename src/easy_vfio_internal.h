@@ -13,6 +13,18 @@
 
 #include "easy_vfio.h"
 
+#include <unistd.h>
+
+/* ---------------- Common Helpers (Internal) ---------------- */
+
+/** Align size up to the system page boundary. */
+static inline uint64_t evfio_page_align(uint64_t size)
+{
+    long ps = sysconf(_SC_PAGESIZE);
+    uint64_t page_size = (ps > 0) ? (uint64_t)ps : 4096;
+    return (size + page_size - 1) & ~(page_size - 1);
+}
+
 /* ---------------- Container (Internal) ---------------- */
 
 int evfio_container_open(evfio_container_t *container);
@@ -79,7 +91,10 @@ int evfio_bdf_valid(const char *bdf);
 int evfio_pci_get_ids(const char *bdf, uint16_t *vendor_id, uint16_t *device_id);
 const char *evfio_strerror(int err);
 
-/* Check if device is currently bound to vfio-pci driver */
+/*
+ * Check if device is currently bound to vfio-pci driver.
+ * Returns 1 if bound to vfio-pci, 0 otherwise (including invalid BDF).
+ */
 int evfio_is_bound_to_vfio(const char *bdf);
 
 #endif /* EASY_VFIO_INTERNAL_H */

@@ -336,6 +336,12 @@ int  evfio_bind_device(const char *bdf);
 int  evfio_unbind_device(const char *bdf);
 int  evfio_bdf_valid(const char *bdf);
 int  evfio_pci_get_ids(const char *bdf, uint16_t *vendor_id, uint16_t *device_id);
+/**
+ * Check if a PCI device is currently bound to the vfio-pci driver.
+ *
+ * @param bdf  PCI BDF address string.
+ * @return 1 if bound to vfio-pci, 0 otherwise (including invalid BDF).
+ */
 int  evfio_is_bound_to_vfio(const char *bdf);
 const char *evfio_strerror(int err);
 

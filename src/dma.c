@@ -14,16 +14,11 @@ int evfio_iommu_dma_map(int container_fd, void *vaddr, uint64_t size,
                         uint64_t iova)
 {
     struct vfio_iommu_type1_dma_map dma_map;
-    long page_size;
 
     if (container_fd < 0 || !vaddr || size == 0)
         return EVFIO_ERR_INVAL;
 
-    /* Align size to page boundary */
-    page_size = sysconf(_SC_PAGESIZE);
-    if (page_size <= 0)
-        page_size = 4096;
-    size = (size + (uint64_t)page_size - 1) & ~((uint64_t)page_size - 1);
+    size = evfio_page_align(size);
 
     memset(&dma_map, 0, sizeof(dma_map));
     dma_map.argsz = sizeof(dma_map);

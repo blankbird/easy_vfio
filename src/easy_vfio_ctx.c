@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -15,9 +16,6 @@
 #include <sys/eventfd.h>
 
 #include "easy_vfio_internal.h"
-
-/* Default page size fallback when sysconf fails */
-#define EVFIO_DEFAULT_PAGE_SIZE 4096
 
 /* ----------------------------------------------------------------
  *  evfio_load_vfio_driver - Idempotent VFIO driver bind
@@ -65,8 +63,7 @@ int evfio_open(evfio_ctx_t **ctx, const char *bdf)
     for (i = 0; i < EVFIO_MAX_MSI_VECTORS; i++)
         c->msi_vectors[i].event_fd = -1;
 
-    strncpy(c->bdf, bdf, EVFIO_BDF_MAX_LEN - 1);
-    c->bdf[EVFIO_BDF_MAX_LEN - 1] = '\0';
+    snprintf(c->bdf, EVFIO_BDF_MAX_LEN, "%s", bdf);
 
     /* Look up IOMMU group */
     group_id = evfio_get_iommu_group(bdf);
@@ -250,17 +247,12 @@ int evfio_handle_interrupt(evfio_ctx_t *ctx, uint32_t vector)
 int evfio_dma_map(evfio_ctx_t *ctx, evfio_dma_t *dma,
                   void *vaddr, uint64_t size, uint64_t iova)
 {
-    long page_size;
     int ret;
 
     if (!ctx || !ctx->initialized || !dma || !vaddr || size == 0)
         return EVFIO_ERR_INVAL;
 
-    /* Align size to page boundary */
-    page_size = sysconf(_SC_PAGESIZE);
-    if (page_size <= 0)
-        page_size = EVFIO_DEFAULT_PAGE_SIZE;
-    size = (size + (uint64_t)page_size - 1) & ~((uint64_t)page_size - 1);
+    size = evfio_page_align(size);
 
     ret = evfio_iommu_dma_map(ctx->container.fd, vaddr, size, iova);
     if (ret != EVFIO_OK)
@@ -299,7 +291,6 @@ int evfio_dma_alloc_map(evfio_ctx_t *ctx, evfio_dma_t *dma,
                         uint64_t size, uint64_t iova)
 {
     void *vaddr;
-    long page_size;
     int ret;
 
     if (!ctx || !ctx->initialized || !dma || size == 0)
@@ -307,11 +298,7 @@ int evfio_dma_alloc_map(evfio_ctx_t *ctx, evfio_dma_t *dma,
 
     memset(dma, 0, sizeof(*dma));
 
-    /* Align size to page boundary */
-    page_size = sysconf(_SC_PAGESIZE);
-    if (page_size <= 0)
-        page_size = EVFIO_DEFAULT_PAGE_SIZE;
-    size = (size + (uint64_t)page_size - 1) & ~((uint64_t)page_size - 1);
+    size = evfio_page_align(size);
 
     /* Allocate page-aligned memory */
     vaddr = mmap(NULL, size, PROT_READ | PROT_WRITE,
