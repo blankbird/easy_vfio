@@ -230,6 +230,30 @@ int evfio_pci_get_ids(const char *bdf, uint16_t *vendor_id,
     return EVFIO_OK;
 }
 
+int evfio_is_bound_to_vfio(const char *bdf)
+{
+    char driver_link[PATH_MAX];
+    char resolved[PATH_MAX];
+    char *driver_name;
+
+    if (!bdf || !evfio_bdf_valid(bdf))
+        return 0;
+
+    snprintf(driver_link, sizeof(driver_link),
+             "/sys/bus/pci/devices/%s/driver", bdf);
+
+    if (realpath(driver_link, resolved) == NULL)
+        return 0; /* Not bound to any driver */
+
+    driver_name = strrchr(resolved, '/');
+    if (!driver_name)
+        return 0;
+
+    driver_name++; /* Skip '/' */
+
+    return (strcmp(driver_name, "vfio-pci") == 0);
+}
+
 const char *evfio_strerror(int err)
 {
     switch (err) {
