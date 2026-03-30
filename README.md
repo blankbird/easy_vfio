@@ -6,7 +6,7 @@ A simple C library for managing PCIe devices via the Linux VFIO (Virtual Functio
 
 - **Context-based lifecycle** – one handle manages all device resources (container, group, device, IOMMU, interrupts)
 - **Plug-and-play design** – embed `evfio_ctx_t` in your project's global handle, init on startup, deinit on shutdown
-- **Driver management** – idempotent `evfio_load_vfio_driver()` to bind devices to `vfio-pci`
+- **Driver management** – idempotent `evfio_load_vfio_driver()` to bind devices to `vfio-pci` using `driver_override`
 - **MSI interrupts** – enable/disable MSI vectors with automatic eventfd management
 - **DMA mapping** – map external memory or allocate+map library-managed buffers
 - **BAR MMIO access** – mmap-based typed 8/16/32/64-bit accessors
@@ -60,7 +60,9 @@ int main(void) {
     /* 5. Or map external memory */
     evfio_dma_t ext_dma;
     char my_buf[4096];
-    evfio_dma_map(ctx, &ext_dma, my_buf, 4096, 0x200000);
+    ext_dma.vaddr = my_buf;
+    ext_dma.size = sizeof(my_buf);
+    evfio_dma_map(ctx, &ext_dma, 0x200000);
 
     /* 6. Wait for interrupt */
     evfio_handle_interrupt(ctx, 0);
@@ -109,7 +111,7 @@ evfio_close(my_dev->vfio);
 | `evfio_msi_enable(ctx, n)` | Enable MSI with n vectors (creates eventfds) |
 | `evfio_msi_disable(ctx)` | Disable MSI and close eventfds |
 | `evfio_handle_interrupt(ctx, vec)` | Wait for interrupt on vector |
-| `evfio_dma_map(ctx, dma, vaddr, size, iova)` | Map external memory for DMA |
+| `evfio_dma_map(ctx, dma, iova)` | Map external memory for DMA (fill dma.vaddr/size first) |
 | `evfio_dma_unmap(ctx, dma)` | Unmap DMA (no memory free) |
 | `evfio_dma_alloc_map(ctx, dma, size, iova)` | Allocate memory + DMA map |
 | `evfio_dma_free_unmap(ctx, dma)` | DMA unmap + free memory |

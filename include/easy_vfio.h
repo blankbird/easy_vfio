@@ -16,8 +16,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-#ifndef ISML_VFIO_H
-#define ISML_VFIO_H
+#ifndef EASY_VFIO_H
+#define EASY_VFIO_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -155,8 +155,9 @@ typedef struct vfio_ctx {
  * Load the VFIO driver for a PCI device.
  *
  * Unbinds the device from its current driver (if any) and binds it to
- * vfio-pci. Idempotent: safe to call multiple times - if the device is
- * already bound to vfio-pci, returns VFIO_OK immediately.
+ * vfio-pci using the driver_override mechanism. Idempotent: safe to call
+ * multiple times - if the device is already bound to vfio-pci, returns
+ * VFIO_OK immediately.
  *
  * @param bdf  PCI BDF address string (e.g. "0000:01:00.0").
  * @return VFIO_OK on success, negative error code on failure.
@@ -231,17 +232,16 @@ int vfio_handle_interrupt(vfio_ctx_t *ctx, uint32_t vector);
  *
  * Creates an IOMMU mapping for caller-owned memory so the device can
  * access it via the specified IOVA. Does NOT allocate memory.
+ * The caller must fill dma->vaddr and dma->size before calling.
+ * On success, dma->iova is set to the provided iova.
  * Use vfio_dma_unmap() to remove the mapping.
  *
  * @param ctx    Initialized device context.
- * @param dma    DMA descriptor to fill (output).
- * @param vaddr  Virtual address of the caller's buffer.
- * @param size   Buffer size in bytes (will be page-aligned).
+ * @param dma    DMA descriptor with vaddr and size pre-filled (iova set on success).
  * @param iova   IO virtual address for device access.
  * @return VFIO_OK on success, negative error code on failure.
  */
-int vfio_dma_map(vfio_ctx_t *ctx, vfio_dma_t *dma,
-                  void *vaddr, uint64_t size, uint64_t iova);
+int vfio_dma_map(vfio_ctx_t *ctx, vfio_dma_t *dma, uint64_t iova);
 
 /**
  * Unmap a DMA mapping (IOMMU unmapping only).
@@ -286,9 +286,11 @@ int vfio_dma_free_unmap(vfio_ctx_t *ctx, vfio_dma_t *dma);
 /**
  * Get MSI configuration information from PCI config space.
  *
- * Reads the MSI capability structure from the device's PCI config space
- * and returns the message address (low/high) and data fields. These are
- * the values programmed by the host for interrupt routing.
+ * Reads the MSI capability structure from the device's sysfs PCI config
+ * file (/sys/bus/pci/devices/<bdf>/config) and returns the message
+ * address (low/high) and data fields. This reads from sysfs rather than
+ * the VFIO config region because VFIO may not return valid MSI data
+ * after taking over the device.
  *
  * Requires MSI to be enabled via vfio_msi_enable() first.
  *
@@ -302,4 +304,4 @@ int vfio_msi_get_config(vfio_ctx_t *ctx, vfio_msi_config_t *config);
 }
 #endif
 
-#endif /* ISML_VFIO_H */
+#endif /* EASY_VFIO_H */

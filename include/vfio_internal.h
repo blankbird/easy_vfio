@@ -11,7 +11,7 @@
 #ifndef VFIO_INTERNAL_H
 #define VFIO_INTERNAL_H
 
-#include "isml_vfio.h"
+#include "easy_vfio.h"
 
 #include <unistd.h>
 

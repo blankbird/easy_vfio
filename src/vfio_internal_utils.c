@@ -144,25 +144,29 @@ int vfio_bind_device(const char *bdf)
     /* Ignore error - device may not be bound to anything */
     (void)ret;
 
-    /* Write vendor/device id to vfio-pci new_id to make it claim the device */
-    uint16_t vendor_id, device_id;
-    ret = vfio_pci_get_ids(bdf, &vendor_id, &device_id);
+    /*
+     * Use the driver_override mechanism to bind the device to vfio-pci.
+     * This is the preferred method over new_id because:
+     * 1. It does not require knowing the vendor/device IDs
+     * 2. It avoids permission issues with /sys/bus/pci/drivers/vfio-pci/new_id
+     * 3. It only affects this specific device, not all devices with the same IDs
+     *
+     * Steps:
+     *   1. Write "vfio-pci" to /sys/bus/pci/devices/<bdf>/driver_override
+     *   2. Write <bdf> to /sys/bus/pci/drivers_probe to trigger binding
+     */
+
+    /* Step 1: Set driver_override to vfio-pci */
+    snprintf(path, sizeof(path),
+             "/sys/bus/pci/devices/%s/driver_override", bdf);
+    ret = sysfs_write(path, "vfio-pci");
     if (ret != VFIO_OK)
         return ret;
 
-    char id_str[32];
-    snprintf(id_str, sizeof(id_str), "%04x %04x", vendor_id, device_id);
-
-    ret = sysfs_write("/sys/bus/pci/drivers/vfio-pci/new_id", id_str);
-    if (ret != VFIO_OK) {
-        /* If new_id fails, the driver may already know about this ID.
-         * Try binding directly. */
-        snprintf(path, sizeof(path),
-                 "/sys/bus/pci/drivers/vfio-pci/bind");
-        ret = sysfs_write(path, bdf);
-        if (ret != VFIO_OK)
-            return ret;
-    }
+    /* Step 2: Trigger driver probe to bind the device */
+    ret = sysfs_write("/sys/bus/pci/drivers_probe", bdf);
+    if (ret != VFIO_OK)
+        return ret;
 
     return VFIO_OK;
 }
