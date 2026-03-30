@@ -16,8 +16,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-#ifndef EASY_VFIO_H
-#define EASY_VFIO_H
+#ifndef ISML_VFIO_H
+#define ISML_VFIO_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -302,4 +302,4 @@ int vfio_msi_get_config(vfio_ctx_t *ctx, vfio_msi_config_t *config);
 }
 #endif
 
-#endif /* EASY_VFIO_H */
+#endif /* ISML_VFIO_H */

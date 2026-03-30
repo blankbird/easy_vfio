@@ -345,15 +345,7 @@ int vfio_dma_free_unmap(vfio_ctx_t *ctx, vfio_dma_t *dma)
  *  vfio_msi_get_config - Read MSI configuration from PCI config space
  * ---------------------------------------------------------------- */
 
-/* PCI capability list starts at offset 0x34 */
-#define PCI_CAP_LIST_PTR    0x34
-#define PCI_CAP_ID_MSI      0x05
-#define PCI_MSI_FLAGS        2   /* Offset within MSI cap to Message Control */
-#define PCI_MSI_ADDRESS_LO   4   /* Offset within MSI cap to Message Address */
-#define PCI_MSI_ADDRESS_HI   8   /* Offset within MSI cap to Upper Address (64-bit) */
-#define PCI_MSI_DATA_32     8   /* Offset within MSI cap to Data (32-bit MSI) */
-#define PCI_MSI_DATA_64     12  /* Offset within MSI cap to Data (64-bit MSI) */
-#define PCI_MSI_FLAGS_64BIT 0x0080  /* 64-bit addresses allowed */
+#include <linux/pci_regs.h>
 
 int vfio_msi_get_config(vfio_ctx_t *ctx, vfio_msi_config_t *config)
 {
@@ -373,7 +365,7 @@ int vfio_msi_get_config(vfio_ctx_t *ctx, vfio_msi_config_t *config)
 
     /* Read capability pointer from PCI config space */
     ret = vfio_pci_config_read(&ctx->device, &cap_ptr, sizeof(cap_ptr),
-                               PCI_CAP_LIST_PTR);
+                               PCI_CAPABILITY_LIST);
     if (ret < 0)
         return (int)ret;
 

@@ -17,7 +17,7 @@ set(LIB_SOURCES
     src/vfio_internal_interrupt.c
     src/vfio_internal_pci_config.c
     src/vfio_internal_utils.c
-    src/vfio_ctx.c
+    src/isml_vfio.c
 )
 
 # Static library
@@ -47,5 +47,5 @@ include(GNUInstallDirs)
 install(TARGETS easy_vfio_static easy_vfio_shared
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(FILES include/easy_vfio.h include/vfio_internal.h
+install(FILES include/isml_vfio.h include/vfio_internal.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
