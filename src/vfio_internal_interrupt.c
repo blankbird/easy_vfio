@@ -9,9 +9,9 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
-#include "easy_vfio.h"
+#include "vfio_internal.h"
 
-int evfio_irq_enable(evfio_device_t *device, uint32_t irq_index,
+int vfio_irq_enable(vfio_device_t *device, uint32_t irq_index,
                      int *fds, uint32_t count)
 {
     struct vfio_irq_set *irq_set;
@@ -19,12 +19,12 @@ int evfio_irq_enable(evfio_device_t *device, uint32_t irq_index,
     int ret;
 
     if (!device || device->fd < 0 || !fds || count == 0)
-        return EVFIO_ERR_INVAL;
+        return VFIO_ERR_INVAL;
 
     irq_set_size = sizeof(*irq_set) + (count * sizeof(int32_t));
     irq_set = calloc(1, irq_set_size);
     if (!irq_set)
-        return EVFIO_ERR_ALLOC;
+        return VFIO_ERR_ALLOC;
 
     irq_set->argsz = (uint32_t)irq_set_size;
     irq_set->flags = VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_TRIGGER;
@@ -38,17 +38,17 @@ int evfio_irq_enable(evfio_device_t *device, uint32_t irq_index,
     free(irq_set);
 
     if (ret < 0)
-        return EVFIO_ERR_IOCTL;
+        return VFIO_ERR_IOCTL;
 
-    return EVFIO_OK;
+    return VFIO_OK;
 }
 
-int evfio_irq_disable(evfio_device_t *device, uint32_t irq_index)
+int vfio_irq_disable(vfio_device_t *device, uint32_t irq_index)
 {
     struct vfio_irq_set irq_set;
 
     if (!device || device->fd < 0)
-        return EVFIO_ERR_INVAL;
+        return VFIO_ERR_INVAL;
 
     memset(&irq_set, 0, sizeof(irq_set));
     irq_set.argsz = sizeof(irq_set);
@@ -58,17 +58,17 @@ int evfio_irq_disable(evfio_device_t *device, uint32_t irq_index)
     irq_set.count = 0;
 
     if (ioctl(device->fd, VFIO_DEVICE_SET_IRQS, &irq_set) < 0)
-        return EVFIO_ERR_IOCTL;
+        return VFIO_ERR_IOCTL;
 
-    return EVFIO_OK;
+    return VFIO_OK;
 }
 
-int evfio_irq_unmask_intx(evfio_device_t *device)
+int vfio_irq_unmask_intx(vfio_device_t *device)
 {
     struct vfio_irq_set irq_set;
 
     if (!device || device->fd < 0)
-        return EVFIO_ERR_INVAL;
+        return VFIO_ERR_INVAL;
 
     memset(&irq_set, 0, sizeof(irq_set));
     irq_set.argsz = sizeof(irq_set);
@@ -78,7 +78,7 @@ int evfio_irq_unmask_intx(evfio_device_t *device)
     irq_set.count = 1;
 
     if (ioctl(device->fd, VFIO_DEVICE_SET_IRQS, &irq_set) < 0)
-        return EVFIO_ERR_IOCTL;
+        return VFIO_ERR_IOCTL;
 
-    return EVFIO_OK;
+    return VFIO_OK;
 }
