@@ -9,15 +9,15 @@ add_compile_definitions(_POSIX_C_SOURCE=200809L _GNU_SOURCE)
 
 # Library sources
 set(LIB_SOURCES
-    src/container.c
-    src/group.c
-    src/device.c
-    src/region.c
-    src/dma.c
-    src/interrupt.c
-    src/pci_config.c
-    src/utils.c
-    src/easy_vfio_ctx.c
+    src/vfio_internal_container.c
+    src/vfio_internal_group.c
+    src/vfio_internal_device.c
+    src/vfio_internal_region.c
+    src/vfio_internal_dma.c
+    src/vfio_internal_interrupt.c
+    src/vfio_internal_pci_config.c
+    src/vfio_internal_utils.c
+    src/vfio_ctx.c
 )
 
 # Static library
@@ -33,7 +33,6 @@ set_target_properties(easy_vfio_shared PROPERTIES OUTPUT_NAME easy_vfio)
 # Test executable
 add_executable(test_easy_vfio tests/test_easy_vfio.c)
 target_link_libraries(test_easy_vfio PRIVATE easy_vfio_static)
-target_include_directories(test_easy_vfio PRIVATE src)
 
 # Example executable
 add_executable(example_basic examples/example_basic.c)
@@ -48,4 +47,5 @@ include(GNUInstallDirs)
 install(TARGETS easy_vfio_static easy_vfio_shared
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(FILES include/easy_vfio.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES include/easy_vfio.h include/vfio_internal.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
