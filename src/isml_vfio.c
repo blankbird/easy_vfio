@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/eventfd.h>
+#include <linux/pci_regs.h>
 
 #include "vfio_internal.h"
 
@@ -344,8 +345,6 @@ int vfio_dma_free_unmap(vfio_ctx_t *ctx, vfio_dma_t *dma)
 /* ----------------------------------------------------------------
  *  vfio_msi_get_config - Read MSI configuration from PCI config space
  * ---------------------------------------------------------------- */
-
-#include <linux/pci_regs.h>
 
 int vfio_msi_get_config(vfio_ctx_t *ctx, vfio_msi_config_t *config)
 {

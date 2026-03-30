@@ -61,3 +61,5 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 tests/test_easy_vfio
+
+.codex
