@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <sys/mman.h>
 #include <sys/eventfd.h>
 #include <linux/pci_regs.h>
@@ -245,21 +247,20 @@ int vfio_handle_interrupt(vfio_ctx_t *ctx, uint32_t vector)
  *  vfio_dma_map - Map external memory for DMA (no allocation)
  * ---------------------------------------------------------------- */
 
-int vfio_dma_map(vfio_ctx_t *ctx, vfio_dma_t *dma,
-                  void *vaddr, uint64_t size, uint64_t iova)
+int vfio_dma_map(vfio_ctx_t *ctx, vfio_dma_t *dma, uint64_t iova)
 {
     int ret;
+    uint64_t size;
 
-    if (!ctx || !ctx->initialized || !dma || !vaddr || size == 0)
+    if (!ctx || !ctx->initialized || !dma || !dma->vaddr || dma->size == 0)
         return VFIO_ERR_INVAL;
 
-    size = vfio_page_align(size);
+    size = vfio_page_align(dma->size);
 
-    ret = vfio_iommu_dma_map(ctx->container.fd, vaddr, size, iova);
+    ret = vfio_iommu_dma_map(ctx->container.fd, dma->vaddr, size, iova);
     if (ret != VFIO_OK)
         return ret;
 
-    dma->vaddr = vaddr;
     dma->iova = iova;
     dma->size = size;
     return VFIO_OK;
@@ -343,15 +344,23 @@ int vfio_dma_free_unmap(vfio_ctx_t *ctx, vfio_dma_t *dma)
 }
 
 /* ----------------------------------------------------------------
- *  vfio_msi_get_config - Read MSI configuration from PCI config space
+ *  vfio_msi_get_config - Read MSI configuration from sysfs PCI config
+ *
+ *  After VFIO takes over a device, reading MSI capability data through
+ *  the VFIO config region may not return valid information. Instead,
+ *  read directly from the sysfs config file at:
+ *    /sys/bus/pci/devices/<bdf>/config
+ *  using standard PCI register offsets from <linux/pci_regs.h>.
  * ---------------------------------------------------------------- */
 
 int vfio_msi_get_config(vfio_ctx_t *ctx, vfio_msi_config_t *config)
 {
+    char config_path[PATH_MAX];
+    int fd;
     uint8_t cap_ptr;
     uint8_t cap_id;
     uint16_t msi_control;
-    ssize_t ret;
+    ssize_t n;
     int max_caps = 48; /* Safety limit to avoid infinite loops */
 
     if (!ctx || !ctx->initialized || !config)
@@ -362,75 +371,94 @@ int vfio_msi_get_config(vfio_ctx_t *ctx, vfio_msi_config_t *config)
 
     memset(config, 0, sizeof(*config));
 
+    /* Open sysfs PCI config file for this BDF */
+    snprintf(config_path, sizeof(config_path),
+             "/sys/bus/pci/devices/%s/config", ctx->bdf);
+
+    fd = open(config_path, O_RDONLY);
+    if (fd < 0)
+        return VFIO_ERR_OPEN;
+
     /* Read capability pointer from PCI config space */
-    ret = vfio_pci_config_read(&ctx->device, &cap_ptr, sizeof(cap_ptr),
-                               PCI_CAPABILITY_LIST);
-    if (ret < 0)
-        return (int)ret;
+    n = pread(fd, &cap_ptr, sizeof(cap_ptr), PCI_CAPABILITY_LIST);
+    if (n != (ssize_t)sizeof(cap_ptr)) {
+        close(fd);
+        return VFIO_ERR_IOCTL;
+    }
 
     /* Walk the capability list to find MSI capability */
+    cap_id = 0;
     while (cap_ptr != 0 && max_caps-- > 0) {
         /* Capability pointers are dword-aligned */
         cap_ptr &= 0xFC;
         if (cap_ptr == 0)
             break;
 
-        ret = vfio_pci_config_read(&ctx->device, &cap_id, sizeof(cap_id),
-                                   cap_ptr);
-        if (ret < 0)
-            return (int)ret;
+        n = pread(fd, &cap_id, sizeof(cap_id), cap_ptr);
+        if (n != (ssize_t)sizeof(cap_id)) {
+            close(fd);
+            return VFIO_ERR_IOCTL;
+        }
 
         if (cap_id == PCI_CAP_ID_MSI)
             break;
 
         /* Read next capability pointer (offset + 1) */
-        ret = vfio_pci_config_read(&ctx->device, &cap_ptr, sizeof(cap_ptr),
-                                   cap_ptr + 1);
-        if (ret < 0)
-            return (int)ret;
+        n = pread(fd, &cap_ptr, sizeof(cap_ptr), cap_ptr + 1);
+        if (n != (ssize_t)sizeof(cap_ptr)) {
+            close(fd);
+            return VFIO_ERR_IOCTL;
+        }
     }
 
-    if (cap_id != PCI_CAP_ID_MSI)
+    if (cap_id != PCI_CAP_ID_MSI) {
+        close(fd);
         return VFIO_ERR_NOSYS;
+    }
 
     /* Read MSI Message Control register */
-    ret = vfio_pci_config_read(&ctx->device, &msi_control,
-                               sizeof(msi_control), cap_ptr + PCI_MSI_FLAGS);
-    if (ret < 0)
-        return (int)ret;
+    n = pread(fd, &msi_control, sizeof(msi_control),
+              cap_ptr + PCI_MSI_FLAGS);
+    if (n != (ssize_t)sizeof(msi_control)) {
+        close(fd);
+        return VFIO_ERR_IOCTL;
+    }
 
     config->control = msi_control;
 
     /* Read Message Address (lower 32 bits) */
-    ret = vfio_pci_config_read(&ctx->device, &config->addr_low,
-                               sizeof(config->addr_low),
-                               cap_ptr + PCI_MSI_ADDRESS_LO);
-    if (ret < 0)
-        return (int)ret;
+    n = pread(fd, &config->addr_low, sizeof(config->addr_low),
+              cap_ptr + PCI_MSI_ADDRESS_LO);
+    if (n != (ssize_t)sizeof(config->addr_low)) {
+        close(fd);
+        return VFIO_ERR_IOCTL;
+    }
 
     /* Check if 64-bit capable */
     if (msi_control & PCI_MSI_FLAGS_64BIT) {
         /* Read upper 32 bits of address */
-        ret = vfio_pci_config_read(&ctx->device, &config->addr_high,
-                                   sizeof(config->addr_high),
-                                   cap_ptr + PCI_MSI_ADDRESS_HI);
-        if (ret < 0)
-            return (int)ret;
+        n = pread(fd, &config->addr_high, sizeof(config->addr_high),
+                  cap_ptr + PCI_MSI_ADDRESS_HI);
+        if (n != (ssize_t)sizeof(config->addr_high)) {
+            close(fd);
+            return VFIO_ERR_IOCTL;
+        }
 
         /* Read Message Data at 64-bit offset */
-        ret = vfio_pci_config_read(&ctx->device, &config->raw_data,
-                                   sizeof(config->raw_data),
-                                   cap_ptr + PCI_MSI_DATA_64);
+        n = pread(fd, &config->raw_data, sizeof(config->raw_data),
+                  cap_ptr + PCI_MSI_DATA_64);
     } else {
         config->addr_high = 0;
         /* Read Message Data at 32-bit offset */
-        ret = vfio_pci_config_read(&ctx->device, &config->raw_data,
-                                   sizeof(config->raw_data),
-                                   cap_ptr + PCI_MSI_DATA_32);
+        n = pread(fd, &config->raw_data, sizeof(config->raw_data),
+                  cap_ptr + PCI_MSI_DATA_32);
     }
 
-    if (ret < 0)
-        return (int)ret;
+    if (n != (ssize_t)sizeof(config->raw_data)) {
+        close(fd);
+        return VFIO_ERR_IOCTL;
+    }
 
+    close(fd);
     return VFIO_OK;
 }

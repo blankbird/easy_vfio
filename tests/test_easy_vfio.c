@@ -430,15 +430,25 @@ static void test_dma_map_null_safety(void)
     TEST("vfio_dma_map: NULL/invalid safety");
     int ok = 1;
     vfio_dma_t dma;
-    char buf[4096];
-    ok &= (vfio_dma_map(NULL, &dma, buf, 4096, 0) == VFIO_ERR_INVAL);
+    memset(&dma, 0, sizeof(dma));
+    dma.vaddr = (void *)(uintptr_t)0x1000;
+    dma.size = 4096;
+    ok &= (vfio_dma_map(NULL, &dma, 0) == VFIO_ERR_INVAL);
     vfio_ctx_t dummy;
     memset(&dummy, 0, sizeof(dummy));
-    ok &= (vfio_dma_map(&dummy, &dma, buf, 4096, 0) == VFIO_ERR_INVAL);
+    ok &= (vfio_dma_map(&dummy, &dma, 0) == VFIO_ERR_INVAL);
     dummy.initialized = 1;
-    ok &= (vfio_dma_map(&dummy, NULL, buf, 4096, 0) == VFIO_ERR_INVAL);
-    ok &= (vfio_dma_map(&dummy, &dma, NULL, 4096, 0) == VFIO_ERR_INVAL);
-    ok &= (vfio_dma_map(&dummy, &dma, buf, 0, 0) == VFIO_ERR_INVAL);
+    ok &= (vfio_dma_map(&dummy, NULL, 0) == VFIO_ERR_INVAL);
+    /* dma with NULL vaddr */
+    vfio_dma_t dma_null;
+    memset(&dma_null, 0, sizeof(dma_null));
+    dma_null.size = 4096;
+    ok &= (vfio_dma_map(&dummy, &dma_null, 0) == VFIO_ERR_INVAL);
+    /* dma with zero size */
+    vfio_dma_t dma_zero;
+    memset(&dma_zero, 0, sizeof(dma_zero));
+    dma_zero.vaddr = (void *)(uintptr_t)0x1000;
+    ok &= (vfio_dma_map(&dummy, &dma_zero, 0) == VFIO_ERR_INVAL);
     if (ok)
         PASS();
     else
