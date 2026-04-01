@@ -7,7 +7,7 @@
  *
  * Supports two backends:
  *   - Legacy (pre-6.8): container + group + TYPE1v2 IOMMU
- *   - New (>= 6.8):     iommufd + device cdev
+ *   - New (6.8+):       iommufd + device cdev
  *
  * vfio_open() tries the iommufd path first; on failure it falls
  * back to the legacy container/group path transparently.

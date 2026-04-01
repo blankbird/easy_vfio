@@ -59,7 +59,7 @@ extern "C" {
 /** VFIO backend mode: legacy container/group (pre-6.8 kernel) */
 #define VFIO_MODE_LEGACY       0
 
-/** VFIO backend mode: iommufd + device cdev (kernel >= 6.8) */
+/** VFIO backend mode: iommufd + device cdev (kernel 6.8+) */
 #define VFIO_MODE_IOMMUFD      1
 
 /* ================================================================

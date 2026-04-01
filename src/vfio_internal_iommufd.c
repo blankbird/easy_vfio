@@ -1,5 +1,5 @@
 /*
- * easy_vfio - iommufd/cdev backend (new VFIO, kernel >= 6.8)
+ * easy_vfio - iommufd/cdev backend (new VFIO, kernel 6.8+)
  *
  * Implements the new VFIO device access path using iommufd for IOMMU
  * management and device character devices (cdev) for direct device access,
