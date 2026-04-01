@@ -547,6 +547,164 @@ static void test_msi_get_config_null_safety(void)
         FAIL("NULL/invalid safety failed");
 }
 
+/* ---- BAR region-based accessor tests ---- */
+
+static void test_bar_init_null_safety(void)
+{
+    TEST("bar_init: NULL/invalid safety");
+    int ok = 1;
+    vfio_bar_t bar;
+    vfio_device_t dev = { .fd = 999 };
+    /* NULL bar pointer */
+    ok &= (vfio_bar_init(NULL, &dev, 0) == VFIO_ERR_INVAL);
+    /* NULL device pointer */
+    ok &= (vfio_bar_init(&bar, NULL, 0) == VFIO_ERR_INVAL);
+    /* Invalid device fd */
+    vfio_device_t dev_bad = { .fd = -1 };
+    ok &= (vfio_bar_init(&bar, &dev_bad, 0) == VFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("NULL/invalid safety failed");
+}
+
+static void test_bar_read_null_safety(void)
+{
+    TEST("bar_read: NULL/invalid safety");
+    int ok = 1;
+    uint8_t  v8;
+    uint16_t v16;
+    uint32_t v32;
+    uint64_t v64;
+    /* NULL bar pointer */
+    ok &= (vfio_bar_read8(NULL, 0, &v8) == VFIO_ERR_INVAL);
+    ok &= (vfio_bar_read16(NULL, 0, &v16) == VFIO_ERR_INVAL);
+    ok &= (vfio_bar_read32(NULL, 0, &v32) == VFIO_ERR_INVAL);
+    ok &= (vfio_bar_read64(NULL, 0, &v64) == VFIO_ERR_INVAL);
+    /* NULL value pointer */
+    vfio_bar_t bar;
+    memset(&bar, 0, sizeof(bar));
+    bar.device_fd = 999;
+    bar.size = 4096;
+    ok &= (vfio_bar_read8(&bar, 0, NULL) == VFIO_ERR_INVAL);
+    ok &= (vfio_bar_read16(&bar, 0, NULL) == VFIO_ERR_INVAL);
+    ok &= (vfio_bar_read32(&bar, 0, NULL) == VFIO_ERR_INVAL);
+    ok &= (vfio_bar_read64(&bar, 0, NULL) == VFIO_ERR_INVAL);
+    /* Uninitialized bar (device_fd = -1) */
+    vfio_bar_t bar_bad;
+    memset(&bar_bad, 0, sizeof(bar_bad));
+    bar_bad.device_fd = -1;
+    ok &= (vfio_bar_read32(&bar_bad, 0, &v32) == VFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("NULL/invalid safety failed");
+}
+
+static void test_bar_write_null_safety(void)
+{
+    TEST("bar_write: NULL/invalid safety");
+    int ok = 1;
+    /* NULL bar pointer */
+    ok &= (vfio_bar_write8(NULL, 0, 0) == VFIO_ERR_INVAL);
+    ok &= (vfio_bar_write16(NULL, 0, 0) == VFIO_ERR_INVAL);
+    ok &= (vfio_bar_write32(NULL, 0, 0) == VFIO_ERR_INVAL);
+    ok &= (vfio_bar_write64(NULL, 0, 0) == VFIO_ERR_INVAL);
+    /* Uninitialized bar (device_fd = -1) */
+    vfio_bar_t bar_bad;
+    memset(&bar_bad, 0, sizeof(bar_bad));
+    bar_bad.device_fd = -1;
+    ok &= (vfio_bar_write32(&bar_bad, 0, 0) == VFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("NULL/invalid safety failed");
+}
+
+static void test_bar_bounds_check(void)
+{
+    TEST("bar_read/write: bounds and alignment check");
+    int ok = 1;
+    uint32_t v32;
+    uint16_t v16;
+    vfio_bar_t bar;
+    memset(&bar, 0, sizeof(bar));
+    bar.device_fd = 999;
+    bar.size = 16; /* Small region for bounds testing */
+    /* Out of bounds: offset 16 + 4 > size 16 */
+    ok &= (vfio_bar_read32(&bar, 16, &v32) == VFIO_ERR_INVAL);
+    /* Out of bounds: offset 14 + 4 > size 16 */
+    ok &= (vfio_bar_read32(&bar, 14, &v32) == VFIO_ERR_INVAL);
+    /* Misaligned 16-bit access at offset 1 */
+    ok &= (vfio_bar_read16(&bar, 1, &v16) == VFIO_ERR_INVAL);
+    /* Misaligned 32-bit access at offset 2 */
+    ok &= (vfio_bar_read32(&bar, 2, &v32) == VFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("bounds/alignment check failed");
+}
+
+/* ---- iommufd backend NULL safety tests ---- */
+
+static void test_iommufd_null_safety(void)
+{
+    TEST("iommufd: NULL/invalid safety");
+    int ok = 1;
+    /* NULL iommufd pointer */
+    ok &= (vfio_iommufd_open(NULL) == VFIO_ERR_INVAL);
+    vfio_iommufd_close(NULL); /* Should not crash */
+    /* NULL/invalid device open */
+    ok &= (vfio_iommufd_device_open(NULL) == VFIO_ERR_INVAL);
+    ok &= (vfio_iommufd_device_open("garbage") == VFIO_ERR_INVAL);
+    /* NULL/invalid bind */
+    ok &= (vfio_iommufd_device_bind(NULL, 0) == VFIO_ERR_INVAL);
+    vfio_iommufd_t bad_fd = { .fd = -1 };
+    ok &= (vfio_iommufd_device_bind(&bad_fd, 0) == VFIO_ERR_INVAL);
+    /* NULL/invalid attach */
+    ok &= (vfio_iommufd_device_attach(NULL, 0) == VFIO_ERR_INVAL);
+    ok &= (vfio_iommufd_device_attach(&bad_fd, 0) == VFIO_ERR_INVAL);
+    /* NULL/invalid DMA map */
+    ok &= (vfio_iommufd_dma_map(NULL, (void *)(uintptr_t)0x1000, 4096, 0) == VFIO_ERR_INVAL);
+    ok &= (vfio_iommufd_dma_map(&bad_fd, (void *)(uintptr_t)0x1000, 4096, 0) == VFIO_ERR_INVAL);
+    ok &= (vfio_iommufd_dma_map(&bad_fd, NULL, 4096, 0) == VFIO_ERR_INVAL);
+    /* NULL/invalid DMA unmap */
+    ok &= (vfio_iommufd_dma_unmap(NULL, 0, 4096) == VFIO_ERR_INVAL);
+    ok &= (vfio_iommufd_dma_unmap(&bad_fd, 0, 4096) == VFIO_ERR_INVAL);
+    if (ok)
+        PASS();
+    else
+        FAIL("NULL/invalid safety failed");
+}
+
+/* ---- Mode constants test ---- */
+
+static void test_mode_constants(void)
+{
+    TEST("mode constants: LEGACY and IOMMUFD");
+    int ok = 1;
+    ok &= (VFIO_MODE_LEGACY == 0);
+    ok &= (VFIO_MODE_IOMMUFD == 1);
+    ok &= (VFIO_MODE_LEGACY != VFIO_MODE_IOMMUFD);
+    if (ok)
+        PASS();
+    else
+        FAIL("mode constants incorrect");
+}
+
+/* ---- Context mode field test ---- */
+
+static void test_ctx_mode_field(void)
+{
+    TEST("ctx: mode field defaults to LEGACY (0)");
+    vfio_ctx_t dummy;
+    memset(&dummy, 0, sizeof(dummy));
+    if (dummy.mode == VFIO_MODE_LEGACY)
+        PASS();
+    else
+        FAIL("expected mode == VFIO_MODE_LEGACY");
+}
+
 /* ---- Run all tests ---- */
 
 int main(void)
@@ -598,6 +756,17 @@ int main(void)
     test_dma_free_unmap_null_safety();
     test_is_bound_to_vfio_invalid();
     test_msi_get_config_null_safety();
+
+    printf("\n[BAR Region Access]\n");
+    test_bar_init_null_safety();
+    test_bar_read_null_safety();
+    test_bar_write_null_safety();
+    test_bar_bounds_check();
+
+    printf("\n[iommufd Backend]\n");
+    test_iommufd_null_safety();
+    test_mode_constants();
+    test_ctx_mode_field();
 
     printf("\n====================\n");
     printf("Results: %d/%d passed\n", tests_passed, tests_run);

@@ -25,22 +25,63 @@ static inline uint64_t vfio_page_align(uint64_t size)
     return (size + page_size - 1) & ~(page_size - 1);
 }
 
-/* ---------------- Container (Internal) ---------------- */
+/* ---------------- Container (Internal, Legacy) ---------------- */
 
 int vfio_container_open(vfio_container_t *container);
 void vfio_container_close(vfio_container_t *container);
 int vfio_container_set_iommu(vfio_container_t *container, int type);
 int vfio_container_check_extension(vfio_container_t *container, int extension);
 
-/* ---------------- Group (Internal) ---------------- */
+/* ---------------- Group (Internal, Legacy) ---------------- */
 
 int vfio_group_open(vfio_group_t *group, vfio_container_t *container, int group_id);
 void vfio_group_close(vfio_group_t *group);
 int vfio_group_is_viable(vfio_group_t *group);
 
+/* ---------------- iommufd (Internal, New VFIO >= 6.8) ---------------- */
+
+/**
+ * Open /dev/iommu and initialize iommufd context.
+ * Allocates an IOAS for DMA mappings.
+ */
+int vfio_iommufd_open(vfio_iommufd_t *iommufd);
+
+/** Close iommufd and release resources. */
+void vfio_iommufd_close(vfio_iommufd_t *iommufd);
+
+/**
+ * Open device cdev found via sysfs for the given BDF.
+ * Returns the device fd on success, negative error on failure.
+ */
+int vfio_iommufd_device_open(const char *bdf);
+
+/**
+ * Bind a device fd to iommufd and attach it to the IOAS.
+ * On success, iommufd->dev_id is set.
+ */
+int vfio_iommufd_device_bind(vfio_iommufd_t *iommufd, int device_fd);
+
+/** Attach device to the IOAS within iommufd. */
+int vfio_iommufd_device_attach(vfio_iommufd_t *iommufd, int device_fd);
+
+/** Map DMA via iommufd IOAS. */
+int vfio_iommufd_dma_map(vfio_iommufd_t *iommufd, void *vaddr,
+                          uint64_t size, uint64_t iova);
+
+/** Unmap DMA via iommufd IOAS. */
+int vfio_iommufd_dma_unmap(vfio_iommufd_t *iommufd, uint64_t iova,
+                            uint64_t size);
+
 /* ---------------- Device (Internal) ---------------- */
 
 int vfio_device_open(vfio_device_t *device, vfio_group_t *group, const char *bdf);
+
+/**
+ * Initialize device info from an already-opened device fd.
+ * Used by the iommufd path where the fd comes from cdev open.
+ */
+int vfio_device_init_from_fd(vfio_device_t *device, int fd, const char *bdf);
+
 void vfio_device_close(vfio_device_t *device);
 int vfio_device_reset(vfio_device_t *device);
 int vfio_device_get_region_info(vfio_device_t *device, uint32_t index, struct vfio_region_info *info);
@@ -65,8 +106,8 @@ void vfio_mmio_write64(vfio_region_t *region, uint64_t offset, uint64_t val);
 /* ---------------- DMA (Internal) ---------------- */
 
 /*
- * Low-level IOMMU DMA map/unmap. These only create/remove the IOMMU mapping,
- * they do NOT allocate or free memory.
+ * Low-level IOMMU DMA map/unmap via legacy container.
+ * These only create/remove the IOMMU mapping, they do NOT allocate or free memory.
  */
 int vfio_iommu_dma_map(int container_fd, void *vaddr, uint64_t size, uint64_t iova);
 int vfio_iommu_dma_unmap(int container_fd, uint64_t iova, uint64_t size);
