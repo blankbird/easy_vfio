@@ -13,9 +13,11 @@ set(LIB_SOURCES
     src/vfio_internal_group.c
     src/vfio_internal_device.c
     src/vfio_internal_region.c
+    src/vfio_internal_bar.c
     src/vfio_internal_dma.c
     src/vfio_internal_interrupt.c
     src/vfio_internal_pci_config.c
+    src/vfio_internal_iommufd.c
     src/vfio_internal_utils.c
     src/easy_vfio.c
 )

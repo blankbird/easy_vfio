@@ -2,8 +2,15 @@
  * easy_vfio - High-level context API implementation
  *
  * Provides a simplified, context-based interface to VFIO operations.
- * Each function operates on an vfio_ctx_t handle that encapsulates
+ * Each function operates on a vfio_ctx_t handle that encapsulates
  * all resources for a single PCIe device.
+ *
+ * Supports two backends:
+ *   - Legacy (pre-6.8): container + group + TYPE1v2 IOMMU
+ *   - New (6.8+):       iommufd + device cdev
+ *
+ * vfio_open() tries the iommufd path first; on failure it falls
+ * back to the legacy container/group path transparently.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -37,14 +44,123 @@ int vfio_load_vfio_driver(const char *bdf)
 }
 
 /* ----------------------------------------------------------------
+ *  Internal: open device via iommufd/cdev (new VFIO path)
+ *
+ *  1. Open /dev/iommu and allocate IOAS
+ *  2. Open device cdev via sysfs
+ *  3. Bind device to iommufd
+ *  4. Attach device to IOAS
+ *  5. Query device info
+ * ---------------------------------------------------------------- */
+
+static int vfio_open_iommufd(vfio_ctx_t *c, const char *bdf)
+{
+    int dev_fd;
+    int ret;
+
+    /* Step 1: open iommufd and allocate IOAS */
+    ret = vfio_iommufd_open(&c->iommufd);
+    if (ret != VFIO_OK)
+        return ret;
+
+    /* Step 2: open the device character device */
+    dev_fd = vfio_iommufd_device_open(bdf);
+    if (dev_fd < 0) {
+        vfio_iommufd_close(&c->iommufd);
+        return dev_fd;
+    }
+
+    /* Step 3: bind device to iommufd */
+    ret = vfio_iommufd_device_bind(&c->iommufd, dev_fd);
+    if (ret != VFIO_OK) {
+        close(dev_fd);
+        vfio_iommufd_close(&c->iommufd);
+        return ret;
+    }
+
+    /* Step 4: attach device to IOAS */
+    ret = vfio_iommufd_device_attach(&c->iommufd, dev_fd);
+    if (ret != VFIO_OK) {
+        close(dev_fd);
+        vfio_iommufd_close(&c->iommufd);
+        return ret;
+    }
+
+    /* Step 5: initialize device info from the open fd */
+    ret = vfio_device_init_from_fd(&c->device, dev_fd, bdf);
+    if (ret != VFIO_OK) {
+        vfio_iommufd_close(&c->iommufd);
+        return ret;
+    }
+
+    c->mode = VFIO_MODE_IOMMUFD;
+    return VFIO_OK;
+}
+
+/* ----------------------------------------------------------------
+ *  Internal: open device via legacy container/group path
+ *
+ *  1. Look up IOMMU group for the BDF
+ *  2. Open container (/dev/vfio/vfio)
+ *  3. Open group (/dev/vfio/<gid>) and attach to container
+ *  4. Set IOMMU type (TYPE1v2)
+ *  5. Get device fd from group
+ * ---------------------------------------------------------------- */
+
+static int vfio_open_legacy(vfio_ctx_t *c, const char *bdf)
+{
+    int ret;
+    int group_id;
+
+    /* Step 1: look up IOMMU group */
+    group_id = vfio_get_iommu_group(bdf);
+    if (group_id < 0)
+        return group_id;
+    c->iommu_group_id = group_id;
+
+    /* Step 2: open container */
+    ret = vfio_container_open(&c->container);
+    if (ret != VFIO_OK)
+        return ret;
+
+    /* Step 3: open group and attach to container */
+    ret = vfio_group_open(&c->group, &c->container, group_id);
+    if (ret != VFIO_OK) {
+        vfio_container_close(&c->container);
+        return ret;
+    }
+
+    /* Step 4: set IOMMU type */
+    ret = vfio_container_set_iommu(&c->container, VFIO_TYPE1v2_IOMMU);
+    if (ret != VFIO_OK) {
+        vfio_group_close(&c->group);
+        vfio_container_close(&c->container);
+        return ret;
+    }
+
+    /* Step 5: open device via group */
+    ret = vfio_device_open(&c->device, &c->group, bdf);
+    if (ret != VFIO_OK) {
+        vfio_group_close(&c->group);
+        vfio_container_close(&c->container);
+        return ret;
+    }
+
+    c->mode = VFIO_MODE_LEGACY;
+    return VFIO_OK;
+}
+
+/* ----------------------------------------------------------------
  *  vfio_open - Create and initialize a device context
+ *
+ *  Tries the iommufd/cdev path first (new VFIO). If that fails,
+ *  falls back to the legacy container/group path.
  * ---------------------------------------------------------------- */
 
 int vfio_open(vfio_ctx_t **ctx, const char *bdf)
 {
     vfio_ctx_t *c;
     int ret;
-    int group_id;
     uint32_t i;
 
     if (!ctx || !bdf || !vfio_bdf_valid(bdf))
@@ -63,50 +179,27 @@ int vfio_open(vfio_ctx_t **ctx, const char *bdf)
     c->container.fd = -1;
     c->group.fd = -1;
     c->device.fd = -1;
+    c->iommufd.fd = -1;
     for (i = 0; i < VFIO_MAX_MSI_VECTORS; i++)
         c->msi_vectors[i].event_fd = -1;
 
     snprintf(c->bdf, VFIO_BDF_MAX_LEN, "%s", bdf);
 
-    /* Look up IOMMU group */
-    group_id = vfio_get_iommu_group(bdf);
-    if (group_id < 0) {
-        ret = group_id;
-        goto err_free;
+    /* Try new VFIO (iommufd/cdev) first */
+    ret = vfio_open_iommufd(c, bdf);
+    if (ret != VFIO_OK) {
+        /* Fallback to legacy container/group path */
+        ret = vfio_open_legacy(c, bdf);
     }
-    c->iommu_group_id = group_id;
 
-    /* Open container */
-    ret = vfio_container_open(&c->container);
-    if (ret != VFIO_OK)
-        goto err_free;
-
-    /* Open group and attach to container */
-    ret = vfio_group_open(&c->group, &c->container, group_id);
-    if (ret != VFIO_OK)
-        goto err_close_container;
-
-    /* Set IOMMU type */
-    ret = vfio_container_set_iommu(&c->container, VFIO_TYPE1v2_IOMMU);
-    if (ret != VFIO_OK)
-        goto err_close_group;
-
-    /* Open device */
-    ret = vfio_device_open(&c->device, &c->group, bdf);
-    if (ret != VFIO_OK)
-        goto err_close_group;
+    if (ret != VFIO_OK) {
+        free(c);
+        return ret;
+    }
 
     c->initialized = 1;
     *ctx = c;
     return VFIO_OK;
-
-err_close_group:
-    vfio_group_close(&c->group);
-err_close_container:
-    vfio_container_close(&c->container);
-err_free:
-    free(c);
-    return ret;
 }
 
 /* ----------------------------------------------------------------
@@ -122,10 +215,16 @@ void vfio_close(vfio_ctx_t *ctx)
     if (ctx->msi_enabled)
         vfio_msi_disable(ctx);
 
-    /* Close VFIO resources in reverse order */
+    /* Close device fd (shared between both modes) */
     vfio_device_close(&ctx->device);
-    vfio_group_close(&ctx->group);
-    vfio_container_close(&ctx->container);
+
+    /* Release backend-specific resources */
+    if (ctx->mode == VFIO_MODE_IOMMUFD) {
+        vfio_iommufd_close(&ctx->iommufd);
+    } else {
+        vfio_group_close(&ctx->group);
+        vfio_container_close(&ctx->container);
+    }
 
     ctx->initialized = 0;
     free(ctx);
@@ -245,6 +344,8 @@ int vfio_handle_interrupt(vfio_ctx_t *ctx, uint32_t vector)
 
 /* ----------------------------------------------------------------
  *  vfio_dma_map - Map external memory for DMA (no allocation)
+ *
+ *  Dispatches to iommufd or legacy container based on ctx->mode.
  * ---------------------------------------------------------------- */
 
 int vfio_dma_map(vfio_ctx_t *ctx, vfio_dma_t *dma, uint64_t iova)
@@ -257,7 +358,12 @@ int vfio_dma_map(vfio_ctx_t *ctx, vfio_dma_t *dma, uint64_t iova)
 
     size = vfio_page_align(dma->size);
 
-    ret = vfio_iommu_dma_map(ctx->container.fd, dma->vaddr, size, iova);
+    /* Dispatch based on backend mode */
+    if (ctx->mode == VFIO_MODE_IOMMUFD)
+        ret = vfio_iommufd_dma_map(&ctx->iommufd, dma->vaddr, size, iova);
+    else
+        ret = vfio_iommu_dma_map(ctx->container.fd, dma->vaddr, size, iova);
+
     if (ret != VFIO_OK)
         return ret;
 
@@ -277,7 +383,11 @@ int vfio_dma_unmap(vfio_ctx_t *ctx, vfio_dma_t *dma)
     if (!ctx || !ctx->initialized || !dma || !dma->vaddr)
         return VFIO_ERR_INVAL;
 
-    ret = vfio_iommu_dma_unmap(ctx->container.fd, dma->iova, dma->size);
+    /* Dispatch based on backend mode */
+    if (ctx->mode == VFIO_MODE_IOMMUFD)
+        ret = vfio_iommufd_dma_unmap(&ctx->iommufd, dma->iova, dma->size);
+    else
+        ret = vfio_iommu_dma_unmap(ctx->container.fd, dma->iova, dma->size);
 
     dma->vaddr = NULL;
     dma->iova = 0;
@@ -308,8 +418,12 @@ int vfio_dma_alloc_map(vfio_ctx_t *ctx, vfio_dma_t *dma,
     if (vaddr == MAP_FAILED)
         return VFIO_ERR_ALLOC;
 
-    /* Create IOMMU mapping */
-    ret = vfio_iommu_dma_map(ctx->container.fd, vaddr, size, iova);
+    /* Create IOMMU mapping via the appropriate backend */
+    if (ctx->mode == VFIO_MODE_IOMMUFD)
+        ret = vfio_iommufd_dma_map(&ctx->iommufd, vaddr, size, iova);
+    else
+        ret = vfio_iommu_dma_map(ctx->container.fd, vaddr, size, iova);
+
     if (ret != VFIO_OK) {
         munmap(vaddr, size);
         return ret;
@@ -332,7 +446,11 @@ int vfio_dma_free_unmap(vfio_ctx_t *ctx, vfio_dma_t *dma)
     if (!ctx || !ctx->initialized || !dma || !dma->vaddr)
         return VFIO_ERR_INVAL;
 
-    ret = vfio_iommu_dma_unmap(ctx->container.fd, dma->iova, dma->size);
+    /* Unmap via the appropriate backend */
+    if (ctx->mode == VFIO_MODE_IOMMUFD)
+        ret = vfio_iommufd_dma_unmap(&ctx->iommufd, dma->iova, dma->size);
+    else
+        ret = vfio_iommu_dma_unmap(ctx->container.fd, dma->iova, dma->size);
 
     /* Always free memory, even if unmap fails */
     munmap(dma->vaddr, dma->size);

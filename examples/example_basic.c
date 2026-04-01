@@ -1,7 +1,8 @@
 /*
  * easy_vfio - Basic usage example (High-Level API)
  *
- * Demonstrates the simplified context-based API workflow.
+ * Demonstrates the simplified context-based API workflow, including
+ * BAR access via both mmap (legacy) and region pread/pwrite (new).
  *
  * Usage: ./example_basic <BDF>
  * Example: ./example_basic 0000:01:00.0
@@ -40,15 +41,15 @@ int main(int argc, char *argv[])
     }
     printf("    VFIO driver loaded\n");
 
-    /* Step 2: Open device (container + group + IOMMU + device in one call) */
+    /* Step 2: Open device (auto-selects iommufd or legacy backend) */
     printf("[2] Opening VFIO device...\n");
     ret = vfio_open(&ctx, bdf);
     if (ret != VFIO_OK) {
         fprintf(stderr, "    Failed: %s\n", vfio_strerror(ret));
         return 1;
     }
-    printf("    Device opened (group=%d, regions=%u, irqs=%u)\n",
-           ctx->iommu_group_id,
+    printf("    Device opened (mode=%s, regions=%u, irqs=%u)\n",
+           ctx->mode == VFIO_MODE_IOMMUFD ? "iommufd" : "legacy",
            ctx->device.num_regions,
            ctx->device.num_irqs);
 
@@ -80,16 +81,19 @@ int main(int argc, char *argv[])
         printf("    DMA alloc failed: %s\n", vfio_strerror(ret));
     }
 
-    /* Step 5: Map BAR0 (using low-level API for MMIO access) */
-    printf("[5] Mapping BAR0 (low-level API)...\n");
-    vfio_region_t bar0;
-    ret = vfio_region_map(&bar0, &ctx->device, VFIO_PCI_BAR0_REGION_INDEX);
+    /* Step 5: Read BAR0 via region pread/pwrite (no mmap needed) */
+    printf("[5] Reading BAR0 via region access (pread/pwrite)...\n");
+    vfio_bar_t bar0;
+    ret = vfio_bar_init(&bar0, &ctx->device, VFIO_PCI_BAR0_REGION_INDEX);
     if (ret == VFIO_OK) {
-        uint32_t reg0 = vfio_mmio_read32(&bar0, 0);
-        printf("    BAR0[0x00] = 0x%08x\n", reg0);
-        vfio_region_unmap(&bar0);
+        uint32_t reg0;
+        ret = vfio_bar_read32(&bar0, 0, &reg0);
+        if (ret == VFIO_OK)
+            printf("    BAR0[0x00] = 0x%08x (via pread)\n", reg0);
+        else
+            printf("    BAR0 read failed: %s\n", vfio_strerror(ret));
     } else {
-        printf("    BAR0 not mappable: %s\n", vfio_strerror(ret));
+        printf("    BAR0 init failed: %s\n", vfio_strerror(ret));
     }
 
     /* Step 6: Cleanup (closes everything including MSI) */

@@ -2,15 +2,18 @@
  * easy_vfio - A simple C library for VFIO-based PCIe device management
  *
  * This header provides a high-level context-based API for managing PCIe
- * devices via VFIO. The context (vfio_ctx_t) encapsulates all resources
- * for a device's full lifecycle, making it easy to integrate into existing
- * projects as a plug-and-play component.
+ * devices via VFIO. Supports both legacy VFIO (pre-6.8 container/group)
+ * and new VFIO (6.8+ iommufd/cdev) backends.
+ *
+ * The context (vfio_ctx_t) encapsulates all resources for a device's
+ * full lifecycle, making it easy to integrate into existing projects
+ * as a plug-and-play component.
  *
  * Typical usage:
  *   vfio_ctx_t *ctx = NULL;
  *   vfio_load_vfio_driver("0000:01:00.0");
  *   vfio_open(&ctx, "0000:01:00.0");
- *   // ... use DMA, MSI, MMIO via ctx ...
+ *   // ... use DMA, MSI, BAR via ctx ...
  *   vfio_close(ctx);
  *
  * SPDX-License-Identifier: MIT
@@ -50,27 +53,39 @@ extern "C" {
 /** Maximum BDF string length: "XXXX:XX:XX.X\0" */
 #define VFIO_BDF_MAX_LEN       14
 
-/** Maximum number of MSI/MSI-X vectors managed per device.
- *  32 covers most PCIe devices; increase if your hardware requires more. */
+/** Maximum number of MSI/MSI-X vectors managed per device. */
 #define VFIO_MAX_MSI_VECTORS   32
+
+/** VFIO backend mode: legacy container/group (pre-6.8 kernel) */
+#define VFIO_MODE_LEGACY       0
+
+/** VFIO backend mode: iommufd + device cdev (kernel 6.8+) */
+#define VFIO_MODE_IOMMUFD      1
 
 /* ================================================================
  *  Type Definitions
  * ================================================================ */
 
-/** VFIO container - wraps /dev/vfio/vfio file descriptor. */
+/** VFIO container - wraps /dev/vfio/vfio file descriptor (legacy). */
 typedef struct vfio_container {
     int fd;       /* File descriptor for /dev/vfio/vfio, -1 if closed */
 } vfio_container_t;
 
-/** VFIO group - wraps /dev/vfio/<group_id> file descriptor. */
+/** VFIO group - wraps /dev/vfio/<group_id> file descriptor (legacy). */
 typedef struct vfio_group {
     int fd;             /* File descriptor for /dev/vfio/<group_id>, -1 if closed */
     int group_id;       /* IOMMU group number */
     int container_fd;   /* Associated container fd */
 } vfio_group_t;
 
-/** VFIO device - wraps a device file descriptor obtained from a group. */
+/** iommufd context - wraps /dev/iommu fd and IOAS state (new VFIO). */
+typedef struct vfio_iommufd {
+    int      fd;        /* /dev/iommu fd, -1 if closed */
+    uint32_t ioas_id;   /* IOAS object ID allocated by iommufd */
+    uint32_t dev_id;    /* Device ID returned by VFIO_DEVICE_BIND_IOMMUFD */
+} vfio_iommufd_t;
+
+/** VFIO device - wraps a device file descriptor. */
 typedef struct vfio_device {
     int fd;                        /* Device file descriptor, -1 if closed */
     char bdf[VFIO_BDF_MAX_LEN];  /* PCI BDF address (e.g. "0000:01:00.0") */
@@ -79,7 +94,7 @@ typedef struct vfio_device {
     uint32_t flags;                /* Device capability flags */
 } vfio_device_t;
 
-/** Mapped BAR region for MMIO access. */
+/** Mapped BAR region for MMIO access (mmap-based, legacy). */
 typedef struct vfio_region {
     void    *addr;        /* mmap'd virtual address (NULL if not mapped) */
     uint64_t size;        /* Region size in bytes */
@@ -88,6 +103,20 @@ typedef struct vfio_region {
     uint32_t flags;       /* Region capability flags */
     int      device_fd;   /* Associated device fd */
 } vfio_region_t;
+
+/**
+ * BAR descriptor for region-based access (pread/pwrite, no mmap).
+ *
+ * Cached region info so typed BAR accessors avoid querying region
+ * info on every access. Initialize with vfio_bar_init().
+ */
+typedef struct vfio_bar {
+    uint64_t offset;      /* Region offset in device fd space */
+    uint64_t size;        /* Region size in bytes */
+    uint32_t index;       /* BAR index (0-5) */
+    uint32_t flags;       /* Region capability flags */
+    int      device_fd;   /* Associated device fd */
+} vfio_bar_t;
 
 /** DMA mapping descriptor. */
 typedef struct vfio_dma {
@@ -111,6 +140,10 @@ typedef struct vfio_msi_config {
  *  Create with vfio_open(), destroy with vfio_close().
  *  Pass as the first argument to all high-level API functions.
  *
+ *  Supports both legacy (container/group) and new (iommufd/cdev)
+ *  VFIO backends. The backend is selected automatically at open time:
+ *  iommufd is tried first, legacy is used as fallback.
+ *
  *  Design: embed this in your project's global handle for plug-and-play:
  *    struct my_device_handle {
  *        vfio_ctx_t *vfio;
@@ -127,11 +160,19 @@ typedef struct vfio_msi_vector {
 typedef struct vfio_ctx {
     /* ---- Device Identification ---- */
     char bdf[VFIO_BDF_MAX_LEN];   /* PCI BDF address */
-    int  iommu_group_id;            /* IOMMU group number */
+    int  iommu_group_id;            /* IOMMU group number (legacy mode) */
 
-    /* ---- VFIO Core Resources ---- */
+    /* ---- Backend Mode ---- */
+    int mode;                       /* VFIO_MODE_LEGACY or VFIO_MODE_IOMMUFD */
+
+    /* ---- Legacy VFIO Resources (container/group) ---- */
     vfio_container_t container;    /* VFIO container (/dev/vfio/vfio) */
     vfio_group_t     group;        /* VFIO IOMMU group */
+
+    /* ---- New VFIO Resources (iommufd/cdev) ---- */
+    vfio_iommufd_t   iommufd;     /* iommufd context */
+
+    /* ---- Device (shared between both modes) ---- */
     vfio_device_t    device;       /* VFIO device */
 
     /* ---- MSI Interrupt State ---- */
@@ -299,6 +340,42 @@ int vfio_dma_free_unmap(vfio_ctx_t *ctx, vfio_dma_t *dma);
  * @return VFIO_OK on success, negative error code on failure.
  */
 int vfio_msi_get_config(vfio_ctx_t *ctx, vfio_msi_config_t *config);
+
+/* ================================================================
+ *  BAR Region-Based Access API
+ *
+ *  These functions access BAR registers via VFIO region pread/pwrite
+ *  rather than mmap. This works with all VFIO backends and does not
+ *  require the region to support VFIO_REGION_INFO_FLAG_MMAP.
+ *
+ *  Initialize a vfio_bar_t with vfio_bar_init(), then use the typed
+ *  accessors for 8/16/32/64-bit reads and writes.
+ * ================================================================ */
+
+/**
+ * Initialize a BAR descriptor for region-based access.
+ *
+ * Queries the VFIO region info for the specified BAR index and caches
+ * the offset and size so subsequent accessors avoid repeated ioctls.
+ *
+ * @param bar     BAR descriptor to initialize (output).
+ * @param device  Opened VFIO device.
+ * @param index   BAR index (0-5, or VFIO_PCI_BAR0_REGION_INDEX etc.).
+ * @return VFIO_OK on success, negative error code on failure.
+ */
+int vfio_bar_init(vfio_bar_t *bar, vfio_device_t *device, uint32_t index);
+
+/* Typed BAR reads via region pread (not mmap) */
+int vfio_bar_read8(vfio_bar_t *bar, uint64_t offset, uint8_t *val);
+int vfio_bar_read16(vfio_bar_t *bar, uint64_t offset, uint16_t *val);
+int vfio_bar_read32(vfio_bar_t *bar, uint64_t offset, uint32_t *val);
+int vfio_bar_read64(vfio_bar_t *bar, uint64_t offset, uint64_t *val);
+
+/* Typed BAR writes via region pwrite (not mmap) */
+int vfio_bar_write8(vfio_bar_t *bar, uint64_t offset, uint8_t val);
+int vfio_bar_write16(vfio_bar_t *bar, uint64_t offset, uint16_t val);
+int vfio_bar_write32(vfio_bar_t *bar, uint64_t offset, uint32_t val);
+int vfio_bar_write64(vfio_bar_t *bar, uint64_t offset, uint64_t val);
 
 #ifdef __cplusplus
 }

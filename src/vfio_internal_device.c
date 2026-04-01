@@ -14,7 +14,6 @@ int vfio_device_open(vfio_device_t *device, vfio_group_t *group,
                       const char *bdf)
 {
     int fd;
-    struct vfio_device_info dev_info;
 
     if (!device || !group || group->fd < 0 || !bdf)
         return VFIO_ERR_INVAL;
@@ -22,14 +21,30 @@ int vfio_device_open(vfio_device_t *device, vfio_group_t *group,
     if (!vfio_bdf_valid(bdf))
         return VFIO_ERR_INVAL;
 
-    memset(device, 0, sizeof(*device));
-    device->fd = -1;
-
+    /* Get device fd from the group (legacy path) */
     fd = ioctl(group->fd, VFIO_GROUP_GET_DEVICE_FD, bdf);
     if (fd < 0)
         return VFIO_ERR_OPEN;
 
-    /* Get device info */
+    /* Initialize device struct from the obtained fd */
+    return vfio_device_init_from_fd(device, fd, bdf);
+}
+
+/*
+ * Initialize device info from an already-opened device fd.
+ * Shared by both legacy (group) and new (iommufd/cdev) paths.
+ */
+int vfio_device_init_from_fd(vfio_device_t *device, int fd, const char *bdf)
+{
+    struct vfio_device_info dev_info;
+
+    if (!device || fd < 0 || !bdf)
+        return VFIO_ERR_INVAL;
+
+    memset(device, 0, sizeof(*device));
+    device->fd = -1;
+
+    /* Query device capabilities */
     memset(&dev_info, 0, sizeof(dev_info));
     dev_info.argsz = sizeof(dev_info);
 
